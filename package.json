@@ -1,0 +1,21 @@
+{
+  "name": "encantakids-whatsapp-backend",
+  "version": "1.0.0",
+  "description": "Motor de envio WhatsApp para EncantaKids",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "@supabase/supabase-js": "^2.39.0",
+    "axios": "^1.6.0",
+    "fastify": "^4.26.0",
+    "pino-pretty": "^11.0.0"
+  }
+}
