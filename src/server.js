@@ -9,14 +9,19 @@ import { verificarAvancoPerfil } from './jobs/perfilAvancar.js'
 
 // ============================================================
 // INICIALIZAÇÃO DO SERVIDOR
+// pino-pretty só em dev — produção usa logger JSON nativo
 // ============================================================
+const isProd = process.env.NODE_ENV === 'production'
+
 const fastify = Fastify({
-  logger: {
-    transport: {
-      target: 'pino-pretty',
-      options: { colorize: true }
-    }
-  }
+  logger: isProd
+    ? true
+    : {
+        transport: {
+          target: 'pino-pretty',
+          options: { colorize: true }
+        }
+      }
 })
 
 // CORS — permite chamadas do frontend Lovable
