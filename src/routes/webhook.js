@@ -1,4 +1,5 @@
 // src/routes/webhook.js
+
 import { supabase } from '../lib/supabase.js'
 import { enviarMensagem } from '../lib/evolution.js'
 import { interpretarResposta, extrairTexto } from '../services/parser.js'
@@ -17,8 +18,12 @@ const MSG_CONFIRMACAO_NAO = `Sem problemas! 😊 Não vamos te enviar novidades.
 
 Se mudar de ideia futuramente, é só nos chamar. Tchau! 👋`
 
-// ===== 1. Extração robusta de telefone =====
+
+// ========================================
+// Normalização de telefone
+// ========================================
 function extractPhone(payload) {
+
   const raw =
     payload?.data?.key?.remoteJid ||
     payload?.data?.sender ||
@@ -27,112 +32,207 @@ function extractPhone(payload) {
     payload?.data?.remoteJid ||
     ''
 
-  return raw.split('@')[0].replace(/\D/g, '')
+  const digits = raw.split('@')[0].replace(/\D/g, '')
+
+  return digits
 }
 
-// ===== 2. Busca robusta via função SQL =====
+
+// ========================================
+// Busca cliente via RPC do Supabase
+// ========================================
 async function findClientByPhone(digits) {
-  const { data, error } = await supabase.rpc('buscar_cliente_por_telefone', {
-    p_telefone: digits
-  })
+
+  console.log('🔎 Buscando cliente pelo telefone:', digits)
+
+  const { data, error } = await supabase.rpc(
+    'buscar_cliente_por_telefone',
+    { p_telefone: digits }
+  )
 
   if (error) {
     console.error('❌ Erro ao buscar cliente:', error)
     return null
   }
 
-  return data?.[0] || null
+  if (!data || data.length === 0) {
+    return null
+  }
+
+  return data[0]
 }
 
+
+
 export async function webhookRoutes(fastify) {
+
+  // ========================================
+  // Validação de secret
+  // ========================================
   fastify.addHook('preHandler', async (request, reply) => {
+
     if (request.routerPath !== '/webhook' || request.method !== 'POST') return
+
     const secret = process.env.WEBHOOK_SECRET
     if (!secret) return
+
     const headerSecret =
       request.headers['x-webhook-secret'] ||
       request.headers['x-api-key'] ||
       request.body?.secret
 
     if (headerSecret !== secret) {
-      console.warn(`⚠️  Webhook rejeitado — secret inválido. IP: ${request.ip}`)
+
+      console.warn(`⚠️ Webhook rejeitado — secret inválido. IP: ${request.ip}`)
+
       return reply.code(401).send({ erro: 'Não autorizado' })
     }
+
   })
 
+
+
+  // ========================================
+  // WEBHOOK PRINCIPAL
+  // ========================================
   fastify.post('/webhook', async (request, reply) => {
+
     try {
+
+      console.log('🔥 PATCH NOVO ATIVO')
+
       const payload = request.body
 
-      // 🔍 LOG TEMPORÁRIO — ANTES DE QUALQUER FILTRO
-      console.log('🔍 PAYLOAD RAW:', JSON.stringify(payload, null, 2))
+      console.log('📦 Payload recebido')
 
       const evento = payload?.event || payload?.type
-      console.log('🔍 EVENTO:', evento)
 
       if (!evento?.includes('message') && !evento?.includes('upsert')) {
-        console.log('🔍 IGNORADO por evento:', evento)
+
+        console.log('⏭ Evento ignorado:', evento)
+
         return reply.code(200).send({ ok: true, ignorado: true })
+
       }
 
-      const fromMe = payload?.data?.key?.fromMe || payload?.key?.fromMe
+
+      const fromMe =
+        payload?.data?.key?.fromMe ||
+        payload?.key?.fromMe
+
       if (fromMe) {
-        return reply.code(200).send({ ok: true, ignorado: 'fromMe' })
+
+        console.log('⏭ Ignorado: mensagem enviada por nós')
+
+        return reply.code(200).send({ ok: true })
+
       }
+
 
       const telefone = extractPhone(payload)
       const texto = extrairTexto(payload)
 
-      console.log('🔍 telefone extraído:', telefone)
-      console.log('🔍 texto extraído:', texto)
+      console.log(`📥 Webhook recebido | ${telefone}: "${texto}"`)
 
       if (!telefone || !texto) {
-        return reply.code(200).send({ ok: true, ignorado: 'sem_telefone_ou_texto' })
+
+        console.log('⚠️ Telefone ou texto não identificado')
+
+        return reply.code(200).send({ ok: true })
+
       }
 
-      console.log(`📥 Webhook | ${telefone}: "${texto}"`)
 
-      // ===== 3. Busca cliente com match robusto =====
+
+      // ========================================
+      // Buscar cliente
+      // ========================================
       const cliente = await findClientByPhone(telefone)
 
+
       console.log(
-        `🔍 Cliente encontrado: ${cliente?.nome || 'NÃO ENCONTRADO'} | ID: ${cliente?.id || 'null'}`
+        `👤 Cliente encontrado: ${cliente?.nome || 'NÃO ENCONTRADO'}`
       )
+
 
       const intencao = interpretarResposta(texto)
 
+
+
+      // ========================================
+      // Log da mensagem recebida
+      // ========================================
       await supabase.from('mensagens_log').insert({
+
         cliente_id: cliente?.id || null,
         direcao: 'recebida',
         conteudo: texto,
         intencao_detectada: intencao
+
       })
 
+
       if (!cliente) {
-        console.log(`⚠️  Cliente não encontrado: ${telefone}`)
-        return reply.code(200).send({ ok: true, intencao, cliente: 'nao_encontrado' })
+
+        console.log(`⚠️ Cliente não encontrado para telefone: ${telefone}`)
+
+        return reply.code(200).send({
+          ok: true,
+          cliente: null
+        })
+
       }
+
+
 
       await processarIntencao(intencao, cliente, texto)
 
-      return reply.code(200).send({ ok: true, intencao, cliente_id: cliente.id })
+      return reply.code(200).send({
+        ok: true,
+        cliente_id: cliente.id
+      })
+
+
     } catch (erro) {
+
       console.error('❌ Erro no webhook:', erro)
-      return reply.code(200).send({ ok: false, erro: erro.message })
+
+      return reply.code(200).send({
+        ok: false,
+        erro: erro.message
+      })
+
     }
+
   })
 
-  fastify.get('/webhook', async (request, reply) => {
-    return reply.send({
+
+
+  // ========================================
+  // Endpoint de teste
+  // ========================================
+  fastify.get('/webhook', async () => {
+
+    return {
       status: 'online',
       servico: 'EncantaKids WhatsApp Webhook',
       timestamp: new Date().toISOString()
-    })
+    }
+
   })
+
 }
 
+
+
+// ========================================
+// Processamento de intenção
+// ========================================
 async function processarIntencao(intencao, cliente, textoOriginal) {
+
+
   if (intencao === 'optin_sim') {
+
     await supabase
       .from('clientes')
       .update({
@@ -142,33 +242,53 @@ async function processarIntencao(intencao, cliente, textoOriginal) {
       })
       .eq('id', cliente.id)
 
-    await enviarMensagem(cliente.telefone, MSG_CONFIRMACAO_OPTIN)
+
+    await enviarMensagem(
+      cliente.telefone,
+      MSG_CONFIRMACAO_OPTIN
+    )
+
 
     await supabase.from('mensagens_log').insert({
+
       cliente_id: cliente.id,
       direcao: 'enviada',
       conteudo: MSG_CONFIRMACAO_OPTIN,
       intencao_detectada: 'confirmacao_optin'
+
     })
+
 
     console.log(`✅ Opt-in confirmado: ${cliente.nome}`)
-  } else if (intencao === 'optin_nao') {
+
+  }
+
+
+
+  else if (intencao === 'optin_nao') {
+
     await supabase
       .from('clientes')
-      .update({ optin_marketing: false })
+      .update({
+        optin_marketing: false
+      })
       .eq('id', cliente.id)
 
-    await enviarMensagem(cliente.telefone, MSG_CONFIRMACAO_NAO)
 
-    await supabase.from('mensagens_log').insert({
-      cliente_id: cliente.id,
-      direcao: 'enviada',
-      conteudo: MSG_CONFIRMACAO_NAO,
-      intencao_detectada: 'confirmacao_optout'
-    })
+    await enviarMensagem(
+      cliente.telefone,
+      MSG_CONFIRMACAO_NAO
+    )
+
 
     console.log(`❌ Opt-in recusado: ${cliente.nome}`)
-  } else if (intencao === 'sair') {
+
+  }
+
+
+
+  else if (intencao === 'sair') {
+
     await supabase
       .from('clientes')
       .update({
@@ -177,23 +297,29 @@ async function processarIntencao(intencao, cliente, textoOriginal) {
       })
       .eq('id', cliente.id)
 
+
     await supabase
       .from('fila_envio')
       .update({ status: 'cancelado' })
       .eq('cliente_id', cliente.id)
       .eq('status', 'pendente')
 
-    await enviarMensagem(cliente.telefone, MSG_CONFIRMACAO_OPTOUT)
 
-    await supabase.from('mensagens_log').insert({
-      cliente_id: cliente.id,
-      direcao: 'enviada',
-      conteudo: MSG_CONFIRMACAO_OPTOUT,
-      intencao_detectada: 'confirmacao_sair'
-    })
+    await enviarMensagem(
+      cliente.telefone,
+      MSG_CONFIRMACAO_OPTOUT
+    )
+
 
     console.log(`🚪 Opt-out: ${cliente.nome}`)
-  } else {
-    console.log(`❓ Resposta não reconhecida de ${cliente.nome}: "${textoOriginal}"`)
+
   }
+
+
+  else {
+
+    console.log(`❓ Resposta não reconhecida de ${cliente.nome}: "${textoOriginal}"`)
+
+  }
+
 }
