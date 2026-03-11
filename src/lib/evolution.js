@@ -19,15 +19,31 @@ const getApi = () => {
   })
 }
 
-// Envia mensagem de texto simples
-export async function enviarMensagem(telefone, texto) {
+// Envia mensagem de texto simples OU com botões
+export async function enviarMensagem(telefone, texto, formato = 'texto') {
   const api = getApi()
   const numero = formatarTelefone(telefone)
-  console.log(`📤 Enviando para: ${numero}`)
+
+  console.log(`📤 Enviando para: ${numero} (formato: ${formato})`)
+
+  if (formato === 'botoes') {
+    const response = await api.post(`/message/sendButtons/${INSTANCE}`, {
+      number: numero,
+      title: 'Opt-in Marketing',
+      description: texto,
+      buttons: [
+        { type: 'reply', displayText: 'SIM ✅', id: 'optin_sim' },
+        { type: 'reply', displayText: 'NÃO ❌', id: 'optin_nao' }
+      ]
+    })
+    return response.data
+  }
+
   const response = await api.post(`/message/sendText/${INSTANCE}`, {
     number: numero,
     text: texto
   })
+
   return response.data
 }
 
