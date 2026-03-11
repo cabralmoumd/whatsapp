@@ -191,16 +191,17 @@ async function popularFila(campanha, clientes) {
     const conteudo = preencherTemplate(variacao.conteudo, cliente)
 
     itens.push({
-      campanha_id: campanha.id,
-      cliente_id: cliente.id,
-      instancia_id: campanha.instancia_id,
-      conteudo,
-      versao_msg: variacao.versao,
-      status: 'pendente',
-      tentativas: 0,
-      max_tentativas: 3,
-      agendado_para: agora.toISOString()
-    })
+  campanha_id: campanha.id,
+  cliente_id: cliente.id,
+  instancia_id: campanha.instancia_id,
+  conteudo,
+  versao_msg: variacao.versao,
+  formato_envio: variacao.formato_envio || 'texto',
+  status: 'pendente',
+  tentativas: 0,
+  max_tentativas: 3,
+  agendado_para: agora.toISOString()
+})
   }
 
   const LOTE = 100
