@@ -1,6 +1,4 @@
 // src/routes/webhook.js
-// Recebe e processa todas as respostas dos clientes via Evolution API
-
 import { supabase } from '../lib/supabase.js'
 import { enviarMensagem } from '../lib/evolution.js'
 import { interpretarResposta, extrairTelefone, extrairTexto } from '../services/parser.js'
@@ -21,42 +19,36 @@ Se mudar de ideia futuramente, é só nos chamar. Tchau! 👋`
 
 export async function webhookRoutes(fastify) {
 
-  // ─── CORREÇÃO 2: Validação do WEBHOOK_SECRET ───────────────────────────────
-  // Rejeita qualquer POST que não venha da Evolution API com o secret correto
   fastify.addHook('preHandler', async (request, reply) => {
     if (request.routerPath !== '/webhook' || request.method !== 'POST') return
-
     const secret = process.env.WEBHOOK_SECRET
-    if (!secret) return // se não configurou secret, ignora validação
-
+    if (!secret) return
     const headerSecret = request.headers['x-webhook-secret']
       || request.headers['x-api-key']
       || request.body?.secret
-
     if (headerSecret !== secret) {
       console.warn(`⚠️  Webhook rejeitado — secret inválido. IP: ${request.ip}`)
       return reply.code(401).send({ erro: 'Não autorizado' })
     }
   })
 
-  // Endpoint principal do webhook
   fastify.post('/webhook', async (request, reply) => {
     try {
       const payload = request.body
 
-      // Filtra apenas eventos de mensagem recebida
+      // 🔍 LOG TEMPORÁRIO — ver estrutura exata da Evolution API
+      console.log('🔍 PAYLOAD RAW:', JSON.stringify(payload, null, 2))
+
       const evento = payload?.event || payload?.type
       if (!evento?.includes('message') && !evento?.includes('upsert')) {
         return reply.code(200).send({ ok: true, ignorado: true })
       }
 
-      // Ignora mensagens enviadas pelo próprio sistema
       const fromMe = payload?.data?.key?.fromMe || payload?.key?.fromMe
       if (fromMe) {
         return reply.code(200).send({ ok: true, ignorado: 'fromMe' })
       }
 
-      // Extrai telefone e texto
       const telefone = extrairTelefone(payload)
       const texto = extrairTexto(payload)
 
@@ -66,11 +58,9 @@ export async function webhookRoutes(fastify) {
 
       console.log(`📥 Webhook | ${telefone}: "${texto}"`)
 
-      // Busca cliente no banco pelo telefone
-      // Cobre todas as variações: +5511999999999, 5511999999999, 11999999999
-      const soDigitos = telefone.replace(/\D/g, '')           // 5511999999999
-      const semDDI    = soDigitos.replace(/^55/, '')           // 11999999999
-      const comPlus   = '+' + soDigitos                        // +5511999999999
+      const soDigitos = telefone.replace(/\D/g, '')
+      const semDDI    = soDigitos.replace(/^55/, '')
+      const comPlus   = '+' + soDigitos
 
       const { data: cliente } = await supabase
         .from('clientes')
@@ -82,10 +72,8 @@ export async function webhookRoutes(fastify) {
         ].join(','))
         .single()
 
-      // Interpreta a intenção da resposta
       const intencao = interpretarResposta(texto)
 
-      // Registra no log (mesmo se cliente não encontrado)
       await supabase.from('mensagens_log').insert({
         cliente_id: cliente?.id || null,
         direcao: 'recebida',
@@ -95,6 +83,7 @@ export async function webhookRoutes(fastify) {
 
       if (!cliente) {
         console.log(`⚠️  Cliente não encontrado: ${telefone}`)
+        console.log(`🔍 Buscou por: comPlus=${comPlus} | soDigitos=${soDigitos} | semDDI=${semDDI}`)
         return reply.code(200).send({ ok: true, intencao, cliente: 'nao_encontrado' })
       }
 
@@ -104,12 +93,10 @@ export async function webhookRoutes(fastify) {
 
     } catch (erro) {
       console.error('❌ Erro no webhook:', erro)
-      // Sempre retorna 200 — evita que Evolution API fique reenviando
       return reply.code(200).send({ ok: false, erro: erro.message })
     }
   })
 
-  // Health check do webhook
   fastify.get('/webhook', async (request, reply) => {
     return reply.send({
       status: 'online',
@@ -170,7 +157,6 @@ async function processarIntencao(intencao, cliente, textoOriginal) {
       })
       .eq('id', cliente.id)
 
-    // Cancela todos os envios pendentes deste cliente
     await supabase
       .from('fila_envio')
       .update({ status: 'cancelado' })
