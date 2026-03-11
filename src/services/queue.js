@@ -123,7 +123,7 @@ export async function processarFila(campanhaId = null) {
 
       // Tenta enviar a mensagem
       try {
-        await enviarMensagem(cliente.telefone, item.conteudo)
+        await enviarMensagem(cliente.telefone, item.conteudo, item.formato_envio || 'texto')
 
         // Sucesso — marca como enviado
         await supabase
