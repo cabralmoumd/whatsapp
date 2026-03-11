@@ -6,6 +6,9 @@ import { campanhaRoutes } from './routes/campanhas.js'
 import { verificarAvancoPerfil } from './jobs/perfilAvancar.js'
 import { reconciliarCampanhas } from './jobs/reconciliar.js'
 
+const PATCH_MARKER = 'WEBHOOK_RPC_PHONE_V3_2026_03_11'
+const BUILD_SHA = process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || 'local'
+
 const isProd = process.env.NODE_ENV === 'production'
 
 const fastify = Fastify({
@@ -25,20 +28,23 @@ await fastify.register(campanhaRoutes)
 fastify.get('/', async () => ({
   status: 'online',
   servico: 'EncantaKids WhatsApp Backend',
-  versao: '1.1.0',
+  versao: '1.2.0',
+  marker: PATCH_MARKER,
+  buildSha: BUILD_SHA,
   timestamp: new Date().toISOString()
 }))
 
-fastify.get('/health', async () => ({ status: 'ok' }))
+fastify.get('/health', async () => ({
+  status: 'ok',
+  marker: PATCH_MARKER,
+  buildSha: BUILD_SHA,
+  timestamp: new Date().toISOString()
+}))
 
 // ── Jobs periódicos ──────────────────────────────────────────
-// Avanço de perfil: a cada 6 horas
 setInterval(verificarAvancoPerfil, 6 * 60 * 60 * 1000)
-
-// CORREÇÃO 3: Reconciliação: a cada 10 minutos
 setInterval(reconciliarCampanhas, 10 * 60 * 1000)
 
-// Executa imediatamente ao iniciar
 verificarAvancoPerfil()
 reconciliarCampanhas()
 
@@ -50,12 +56,14 @@ try {
   await fastify.listen({ port: PORT, host: HOST })
   console.log(`
 ╔══════════════════════════════════════════╗
-║   EncantaKids WhatsApp Backend v1.1      ║
-║   Rodando na porta ${PORT}                  ║
+║   EncantaKids WhatsApp Backend v1.2      ║
+║   Porta ${PORT} | SHA ${BUILD_SHA}              ║
 ╠══════════════════════════════════════════╣
+║  🏷️  Marker: ${PATCH_MARKER}            ║
 ║  ✅ Correção 1: Retry webhook Evolution  ║
 ║  ✅ Correção 2: Validação WEBHOOK_SECRET ║
 ║  ✅ Correção 3: Reconciliação campanhas  ║
+║  ✅ Correção 4: Lookup robusto telefone  ║
 ╚══════════════════════════════════════════╝
   `)
 } catch (err) {
