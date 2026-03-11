@@ -36,11 +36,14 @@ export async function webhookRoutes(fastify) {
     try {
       const payload = request.body
 
-      // 🔍 LOG TEMPORÁRIO — ver estrutura exata da Evolution API
+      // 🔍 LOG TEMPORÁRIO — ANTES DE QUALQUER FILTRO
       console.log('🔍 PAYLOAD RAW:', JSON.stringify(payload, null, 2))
 
       const evento = payload?.event || payload?.type
+      console.log('🔍 EVENTO:', evento)
+
       if (!evento?.includes('message') && !evento?.includes('upsert')) {
+        console.log('🔍 IGNORADO por evento:', evento)
         return reply.code(200).send({ ok: true, ignorado: true })
       }
 
@@ -52,6 +55,9 @@ export async function webhookRoutes(fastify) {
       const telefone = extrairTelefone(payload)
       const texto = extrairTexto(payload)
 
+      console.log('🔍 telefone extraído:', telefone)
+      console.log('🔍 texto extraído:', texto)
+
       if (!telefone || !texto) {
         return reply.code(200).send({ ok: true, ignorado: 'sem_telefone_ou_texto' })
       }
@@ -61,6 +67,8 @@ export async function webhookRoutes(fastify) {
       const soDigitos = telefone.replace(/\D/g, '')
       const semDDI    = soDigitos.replace(/^55/, '')
       const comPlus   = '+' + soDigitos
+
+      console.log(`🔍 Buscando: comPlus=${comPlus} | soDigitos=${soDigitos} | semDDI=${semDDI}`)
 
       const { data: cliente } = await supabase
         .from('clientes')
@@ -83,7 +91,6 @@ export async function webhookRoutes(fastify) {
 
       if (!cliente) {
         console.log(`⚠️  Cliente não encontrado: ${telefone}`)
-        console.log(`🔍 Buscou por: comPlus=${comPlus} | soDigitos=${soDigitos} | semDDI=${semDDI}`)
         return reply.code(200).send({ ok: true, intencao, cliente: 'nao_encontrado' })
       }
 
