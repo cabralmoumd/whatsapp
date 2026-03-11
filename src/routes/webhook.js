@@ -1,7 +1,7 @@
 // src/routes/webhook.js
 import { supabase } from '../lib/supabase.js'
 import { enviarMensagem } from '../lib/evolution.js'
-import { interpretarResposta, extrairTelefone, extrairTexto } from '../services/parser.js'
+import { interpretarResposta, extrairTexto } from '../services/parser.js'
 
 const MSG_CONFIRMACAO_OPTIN = `✅ Ótimo! Você está na nossa lista de novidades do EncantaKids.
 
@@ -17,15 +17,43 @@ const MSG_CONFIRMACAO_NAO = `Sem problemas! 😊 Não vamos te enviar novidades.
 
 Se mudar de ideia futuramente, é só nos chamar. Tchau! 👋`
 
-export async function webhookRoutes(fastify) {
+// ===== 1. Extração robusta de telefone =====
+function extractPhone(payload) {
+  const raw =
+    payload?.data?.key?.remoteJid ||
+    payload?.data?.sender ||
+    payload?.data?.message?.key?.remoteJid ||
+    payload?.sender ||
+    payload?.data?.remoteJid ||
+    ''
 
+  return raw.split('@')[0].replace(/\D/g, '')
+}
+
+// ===== 2. Busca robusta via função SQL =====
+async function findClientByPhone(digits) {
+  const { data, error } = await supabase.rpc('buscar_cliente_por_telefone', {
+    p_telefone: digits
+  })
+
+  if (error) {
+    console.error('❌ Erro ao buscar cliente:', error)
+    return null
+  }
+
+  return data?.[0] || null
+}
+
+export async function webhookRoutes(fastify) {
   fastify.addHook('preHandler', async (request, reply) => {
     if (request.routerPath !== '/webhook' || request.method !== 'POST') return
     const secret = process.env.WEBHOOK_SECRET
     if (!secret) return
-    const headerSecret = request.headers['x-webhook-secret']
-      || request.headers['x-api-key']
-      || request.body?.secret
+    const headerSecret =
+      request.headers['x-webhook-secret'] ||
+      request.headers['x-api-key'] ||
+      request.body?.secret
+
     if (headerSecret !== secret) {
       console.warn(`⚠️  Webhook rejeitado — secret inválido. IP: ${request.ip}`)
       return reply.code(401).send({ erro: 'Não autorizado' })
@@ -52,7 +80,7 @@ export async function webhookRoutes(fastify) {
         return reply.code(200).send({ ok: true, ignorado: 'fromMe' })
       }
 
-      const telefone = extrairTelefone(payload)
+      const telefone = extractPhone(payload)
       const texto = extrairTexto(payload)
 
       console.log('🔍 telefone extraído:', telefone)
@@ -64,21 +92,12 @@ export async function webhookRoutes(fastify) {
 
       console.log(`📥 Webhook | ${telefone}: "${texto}"`)
 
-      const soDigitos = telefone.replace(/\D/g, '')
-      const semDDI    = soDigitos.replace(/^55/, '')
-      const comPlus   = '+' + soDigitos
+      // ===== 3. Busca cliente com match robusto =====
+      const cliente = await findClientByPhone(telefone)
 
-      console.log(`🔍 Buscando: comPlus=${comPlus} | soDigitos=${soDigitos} | semDDI=${semDDI}`)
-
-      const { data: cliente } = await supabase
-        .from('clientes')
-        .select('*')
-        .or([
-          `telefone.eq.${comPlus}`,
-          `telefone.eq.${soDigitos}`,
-          `telefone.eq.${semDDI}`
-        ].join(','))
-        .single()
+      console.log(
+        `🔍 Cliente encontrado: ${cliente?.nome || 'NÃO ENCONTRADO'} | ID: ${cliente?.id || 'null'}`
+      )
 
       const intencao = interpretarResposta(texto)
 
@@ -97,7 +116,6 @@ export async function webhookRoutes(fastify) {
       await processarIntencao(intencao, cliente, texto)
 
       return reply.code(200).send({ ok: true, intencao, cliente_id: cliente.id })
-
     } catch (erro) {
       console.error('❌ Erro no webhook:', erro)
       return reply.code(200).send({ ok: false, erro: erro.message })
@@ -114,7 +132,6 @@ export async function webhookRoutes(fastify) {
 }
 
 async function processarIntencao(intencao, cliente, textoOriginal) {
-
   if (intencao === 'optin_sim') {
     await supabase
       .from('clientes')
@@ -135,9 +152,7 @@ async function processarIntencao(intencao, cliente, textoOriginal) {
     })
 
     console.log(`✅ Opt-in confirmado: ${cliente.nome}`)
-  }
-
-  else if (intencao === 'optin_nao') {
+  } else if (intencao === 'optin_nao') {
     await supabase
       .from('clientes')
       .update({ optin_marketing: false })
@@ -153,9 +168,7 @@ async function processarIntencao(intencao, cliente, textoOriginal) {
     })
 
     console.log(`❌ Opt-in recusado: ${cliente.nome}`)
-  }
-
-  else if (intencao === 'sair') {
+  } else if (intencao === 'sair') {
     await supabase
       .from('clientes')
       .update({
@@ -180,9 +193,7 @@ async function processarIntencao(intencao, cliente, textoOriginal) {
     })
 
     console.log(`🚪 Opt-out: ${cliente.nome}`)
-  }
-
-  else {
+  } else {
     console.log(`❓ Resposta não reconhecida de ${cliente.nome}: "${textoOriginal}"`)
   }
 }
