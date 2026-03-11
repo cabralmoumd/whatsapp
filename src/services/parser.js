@@ -19,26 +19,21 @@ const INTENCOES = {
 }
 
 export function interpretarResposta(texto) {
-  if (!texto || typeof texto !== 'string') {
-    return 'outro'
-  }
+  if (!texto || typeof texto !== 'string') return 'outro'
 
-  // Normaliza: minúsculo, sem acentos, sem espaços extras
   const normalizado = texto
     .toLowerCase()
     .trim()
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // remove acentos
-    .replace(/[^a-z0-9\s]/g, '')     // remove caracteres especiais
-    .replace(/\s+/g, ' ')            // normaliza espaços
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ')
 
-  // Verifica cada intenção
   for (const [intencao, palavras] of Object.entries(INTENCOES)) {
     for (const palavra of palavras) {
       const palavraNorm = palavra
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
-
       if (normalizado === palavraNorm || normalizado.startsWith(palavraNorm + ' ')) {
         return intencao
       }
@@ -49,18 +44,32 @@ export function interpretarResposta(texto) {
 }
 
 // Extrai telefone do payload da Evolution API
+// A Evolution API envia no formato: 5511999999999@s.whatsapp.net (sem o +)
+// Retornamos com o + para manter consistência com o banco
 export function extrairTelefone(payload) {
   try {
-    const jid = payload?.data?.key?.remoteJid || payload?.key?.remoteJid || ''
-    // Remove @s.whatsapp.net e @g.us (grupos — ignorar)
+    const jid = payload?.data?.key?.remoteJid
+      || payload?.key?.remoteJid
+      || ''
+
+    // Ignora grupos
     if (jid.includes('@g.us')) return null
-    return jid.replace('@s.whatsapp.net', '').replace('@c.us', '')
+
+    // Remove o sufixo @s.whatsapp.net
+    const numero = jid
+      .replace('@s.whatsapp.net', '')
+      .replace('@c.us', '')
+      .replace(/\D/g, '')
+
+    if (!numero) return null
+
+    // Retorna com + para bater com o formato do banco
+    return '+' + numero
   } catch {
     return null
   }
 }
 
-// Extrai texto da mensagem do payload da Evolution API
 export function extrairTexto(payload) {
   try {
     const msg = payload?.data?.message || payload?.message || {}

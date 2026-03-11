@@ -21,6 +21,24 @@ Se mudar de ideia futuramente, é só nos chamar. Tchau! 👋`
 
 export async function webhookRoutes(fastify) {
 
+  // ─── CORREÇÃO 2: Validação do WEBHOOK_SECRET ───────────────────────────────
+  // Rejeita qualquer POST que não venha da Evolution API com o secret correto
+  fastify.addHook('preHandler', async (request, reply) => {
+    if (request.routerPath !== '/webhook' || request.method !== 'POST') return
+
+    const secret = process.env.WEBHOOK_SECRET
+    if (!secret) return // se não configurou secret, ignora validação
+
+    const headerSecret = request.headers['x-webhook-secret']
+      || request.headers['x-api-key']
+      || request.body?.secret
+
+    if (headerSecret !== secret) {
+      console.warn(`⚠️  Webhook rejeitado — secret inválido. IP: ${request.ip}`)
+      return reply.code(401).send({ erro: 'Não autorizado' })
+    }
+  })
+
   // Endpoint principal do webhook
   fastify.post('/webhook', async (request, reply) => {
     try {
@@ -46,14 +64,22 @@ export async function webhookRoutes(fastify) {
         return reply.code(200).send({ ok: true, ignorado: 'sem_telefone_ou_texto' })
       }
 
-      console.log(`📥 Webhook recebido | ${telefone}: "${texto}"`)
+      console.log(`📥 Webhook | ${telefone}: "${texto}"`)
 
       // Busca cliente no banco pelo telefone
-      const telefoneLimpo = telefone.replace(/\D/g, '').replace(/^55/, '')
+      // Cobre todas as variações: +5511999999999, 5511999999999, 11999999999
+      const soDigitos = telefone.replace(/\D/g, '')           // 5511999999999
+      const semDDI    = soDigitos.replace(/^55/, '')           // 11999999999
+      const comPlus   = '+' + soDigitos                        // +5511999999999
+
       const { data: cliente } = await supabase
         .from('clientes')
         .select('*')
-        .or(`telefone.eq.${telefone},telefone.eq.${telefoneLimpo},telefone.eq.55${telefoneLimpo}`)
+        .or([
+          `telefone.eq.${comPlus}`,
+          `telefone.eq.${soDigitos}`,
+          `telefone.eq.${semDDI}`
+        ].join(','))
         .single()
 
       // Interpreta a intenção da resposta
@@ -67,20 +93,18 @@ export async function webhookRoutes(fastify) {
         intencao_detectada: intencao
       })
 
-      // Se cliente não encontrado, apenas loga e responde 200
       if (!cliente) {
-        console.log(`⚠️  Cliente não encontrado para telefone: ${telefone}`)
+        console.log(`⚠️  Cliente não encontrado: ${telefone}`)
         return reply.code(200).send({ ok: true, intencao, cliente: 'nao_encontrado' })
       }
 
-      // Processa a intenção
       await processarIntencao(intencao, cliente, texto)
 
       return reply.code(200).send({ ok: true, intencao, cliente_id: cliente.id })
 
     } catch (erro) {
       console.error('❌ Erro no webhook:', erro)
-      // Sempre retorna 200 para a Evolution API não reenviar
+      // Sempre retorna 200 — evita que Evolution API fique reenviando
       return reply.code(200).send({ ok: false, erro: erro.message })
     }
   })
@@ -95,11 +119,9 @@ export async function webhookRoutes(fastify) {
   })
 }
 
-// Processa cada tipo de intenção e toma a ação correta
 async function processarIntencao(intencao, cliente, textoOriginal) {
 
   if (intencao === 'optin_sim') {
-    // Confirma opt-in
     await supabase
       .from('clientes')
       .update({
@@ -109,10 +131,8 @@ async function processarIntencao(intencao, cliente, textoOriginal) {
       })
       .eq('id', cliente.id)
 
-    // Envia confirmação
     await enviarMensagem(cliente.telefone, MSG_CONFIRMACAO_OPTIN)
 
-    // Registra confirmação no log
     await supabase.from('mensagens_log').insert({
       cliente_id: cliente.id,
       direcao: 'enviada',
@@ -124,12 +144,9 @@ async function processarIntencao(intencao, cliente, textoOriginal) {
   }
 
   else if (intencao === 'optin_nao') {
-    // Recusa opt-in
     await supabase
       .from('clientes')
-      .update({
-        optin_marketing: false
-      })
+      .update({ optin_marketing: false })
       .eq('id', cliente.id)
 
     await enviarMensagem(cliente.telefone, MSG_CONFIRMACAO_NAO)
@@ -145,7 +162,6 @@ async function processarIntencao(intencao, cliente, textoOriginal) {
   }
 
   else if (intencao === 'sair') {
-    // Opt-out — cancela tudo e envia confirmação
     await supabase
       .from('clientes')
       .update({
@@ -155,15 +171,11 @@ async function processarIntencao(intencao, cliente, textoOriginal) {
       .eq('id', cliente.id)
 
     // Cancela todos os envios pendentes deste cliente
-    const { count } = await supabase
+    await supabase
       .from('fila_envio')
       .update({ status: 'cancelado' })
       .eq('cliente_id', cliente.id)
       .eq('status', 'pendente')
-
-    if (count > 0) {
-      console.log(`🚫 ${count} mensagens canceladas na fila para ${cliente.nome}`)
-    }
 
     await enviarMensagem(cliente.telefone, MSG_CONFIRMACAO_OPTOUT)
 
@@ -174,11 +186,10 @@ async function processarIntencao(intencao, cliente, textoOriginal) {
       intencao_detectada: 'confirmacao_sair'
     })
 
-    console.log(`🚪 Opt-out registrado: ${cliente.nome}`)
+    console.log(`🚪 Opt-out: ${cliente.nome}`)
   }
 
   else {
-    // Resposta não reconhecida — apenas loga
     console.log(`❓ Resposta não reconhecida de ${cliente.nome}: "${textoOriginal}"`)
   }
 }
