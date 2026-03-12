@@ -74,27 +74,6 @@ async function findClientByPhone(digits) {
 export async function webhookRoutes(fastify) {
 
   // ========================================
-  // Validação de secret
-  // ========================================
-  fastify.addHook('preHandler', async (request, reply) => {
-    if (request.routerPath !== '/webhook' || request.method !== 'POST') return
-
-    const secret = process.env.WEBHOOK_SECRET
-    if (!secret) return
-
-    const headerSecret =
-      request.headers['x-webhook-secret'] ||
-      request.headers['x-api-key'] ||
-      request.body?.secret
-
-    if (headerSecret !== secret) {
-      console.warn(`⚠️ Webhook rejeitado — secret inválido. IP: ${request.ip}`)
-      return reply.code(401).send({ erro: 'Não autorizado' })
-    }
-  })
-
-
-  // ========================================
   // WEBHOOK PRINCIPAL
   // ========================================
   fastify.post('/webhook', async (request, reply) => {
@@ -146,14 +125,16 @@ export async function webhookRoutes(fastify) {
 
       // ========================================
       // Log da mensagem recebida
+      // O trigger trg_vincular_cliente preenche cliente_id automaticamente
+      // O trigger trg_atualizar_optin atualiza optin_marketing no cliente
       // ========================================
       await supabase.from('mensagens_log').insert({
-  cliente_id: cliente?.id || null,
-  telefone_remetente: telefone,
-  direcao: 'recebida',
-  conteudo: texto,
-  intencao_detectada: intencao
-})
+        cliente_id: cliente?.id || null,
+        telefone_remetente: telefone,
+        direcao: 'recebida',
+        conteudo: texto,
+        intencao_detectada: intencao
+      })
 
       if (!cliente) {
         console.log(`⚠️ Cliente não encontrado para telefone: ${telefone}`)
@@ -197,23 +178,13 @@ export async function webhookRoutes(fastify) {
 
 // ========================================
 // Processamento de intenção
+// Os UPDATEs em clientes são feitos pelo trigger trg_atualizar_optin
+// Aqui só enviamos mensagens de confirmação e cancelamos fila quando necessário
 // ========================================
 async function processarIntencao(intencao, cliente, textoOriginal) {
 
   if (intencao === 'optin_sim') {
-    await supabase
-      .from('clientes')
-      .update({
-        optin_marketing: true,
-        data_optin: new Date().toISOString(),
-        data_optout: null
-      })
-      .eq('id', cliente.id)
-
-    await enviarMensagem(
-      cliente.telefone,
-      MSG_CONFIRMACAO_OPTIN
-    )
+    await enviarMensagem(cliente.telefone, MSG_CONFIRMACAO_OPTIN)
 
     await supabase.from('mensagens_log').insert({
       cliente_id: cliente.id,
@@ -226,40 +197,34 @@ async function processarIntencao(intencao, cliente, textoOriginal) {
   }
 
   else if (intencao === 'optin_nao') {
-    await supabase
-      .from('clientes')
-      .update({
-        optin_marketing: false
-      })
-      .eq('id', cliente.id)
+    await enviarMensagem(cliente.telefone, MSG_CONFIRMACAO_NAO)
 
-    await enviarMensagem(
-      cliente.telefone,
-      MSG_CONFIRMACAO_NAO
-    )
+    await supabase.from('mensagens_log').insert({
+      cliente_id: cliente.id,
+      direcao: 'enviada',
+      conteudo: MSG_CONFIRMACAO_NAO,
+      intencao_detectada: 'confirmacao_nao'
+    })
 
     console.log(`❌ Opt-in recusado: ${cliente.nome}`)
   }
 
   else if (intencao === 'sair') {
-    await supabase
-      .from('clientes')
-      .update({
-        optin_marketing: false,
-        data_optout: new Date().toISOString()
-      })
-      .eq('id', cliente.id)
-
+    // Cancelar mensagens pendentes na fila (trigger NÃO faz isso)
     await supabase
       .from('fila_envio')
       .update({ status: 'cancelado' })
       .eq('cliente_id', cliente.id)
       .eq('status', 'pendente')
 
-    await enviarMensagem(
-      cliente.telefone,
-      MSG_CONFIRMACAO_OPTOUT
-    )
+    await enviarMensagem(cliente.telefone, MSG_CONFIRMACAO_OPTOUT)
+
+    await supabase.from('mensagens_log').insert({
+      cliente_id: cliente.id,
+      direcao: 'enviada',
+      conteudo: MSG_CONFIRMACAO_OPTOUT,
+      intencao_detectada: 'confirmacao_sair'
+    })
 
     console.log(`🚪 Opt-out: ${cliente.nome}`)
   }
@@ -268,4 +233,3 @@ async function processarIntencao(intencao, cliente, textoOriginal) {
     console.log(`❓ Resposta não reconhecida de ${cliente.nome}: "${textoOriginal}"`)
   }
 }
-
