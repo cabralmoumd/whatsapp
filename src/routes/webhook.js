@@ -148,11 +148,12 @@ export async function webhookRoutes(fastify) {
       // Log da mensagem recebida
       // ========================================
       await supabase.from('mensagens_log').insert({
-        cliente_id: cliente?.id || null,
-        direcao: 'recebida',
-        conteudo: texto,
-        intencao_detectada: intencao
-      })
+  cliente_id: cliente?.id || null,
+  telefone_remetente: telefone,
+  direcao: 'recebida',
+  conteudo: texto,
+  intencao_detectada: intencao
+})
 
       if (!cliente) {
         console.log(`⚠️ Cliente não encontrado para telefone: ${telefone}`)
